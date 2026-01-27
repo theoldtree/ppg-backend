@@ -1,0 +1,10 @@
+# Testing dependencies
+pytest==7.4.4
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.26.0  # Already in main requirements but needed for TestClient
+
+# Code quality
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
