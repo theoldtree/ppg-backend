@@ -21,12 +21,12 @@ class PPGQualityControl:
     MIN_AC_AMPLITUDE = 5 # Minimum AC amplitude
     MAX_VARIABILITY = 0.5 # Maximum coefficient of variation
 
-    def __init__(self, sampling_rate: int = 300):
+    def __init__(self, sampling_rate: int = 200):
         """
         Initialize QC service
 
         Args:
-            sampling_rate: Sampling rate in Hz (default 300Hz)
+            sampling_rate: Sampling rate in Hz (default 200Hz)
         """
         self.sampling_rate = sampling_rate
 
@@ -35,7 +35,7 @@ class PPGQualityControl:
         Analyze PPG signal quality and generate feedback
 
         Args:
-            ppg_data: List of PPG values (should be 600 samples for 2-second window)
+            ppg_data: List of PPG values (should be 400 samples for 2-second window at 200Hz)
 
         Returns:
             dict with keys:
@@ -45,12 +45,12 @@ class PPGQualityControl:
                 - feedback_message: str
                 - feedback_type: str (good/pressure/motion/coverage/weak)
         """
-        if len(ppg_data) != 600:
+        if len(ppg_data) != 400:
             return {
                 "is_acceptable": False,
                 "snr": None,
                 "peak_count": None,
-                "feedback_message": f"데이터 길이 오류 (예상: 600, 실제: {len(ppg_data)})",
+                "feedback_message": f"데이터 길이 오류 (예상: 400, 실제: {len(ppg_data)})",
                 "feedback_type": "error"
             }
 
@@ -251,7 +251,7 @@ def analyze_ppg_signal(ppg_data: list[float]) -> dict:
     Convenience function to analyze PPG signal quality
 
     Args:
-        ppg_data: List of PPG values (600 samples for 2-second window)
+        ppg_data: List of PPG values (400 samples for 2-second window at 200Hz)
 
     Returns:
         Quality analysis results

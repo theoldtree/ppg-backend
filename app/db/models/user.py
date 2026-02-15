@@ -1,7 +1,7 @@
 """
 User model
 """
-from sqlalchemy import Column, Integer, String, DateTime, func
+from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, func
 from app.db.database import Base
 
 
@@ -22,6 +22,14 @@ class User(Base):
     # Demographics
     gender = Column(String(10), nullable=True)  # 'male', 'female', 'other'
     birth_year = Column(Integer, nullable=True)
+
+    # Health profile (optional fields)
+    height = Column(Float, nullable=True)  # Height in cm
+    weight = Column(Float, nullable=True)  # Weight in kg
+    has_diabetes = Column(Boolean, nullable=True)  # Diabetes status
+
+    # Profile completion flag
+    is_profile_complete = Column(Boolean, default=False, nullable=False)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

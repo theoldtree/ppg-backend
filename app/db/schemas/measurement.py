@@ -31,7 +31,7 @@ class QCDataBatch(BaseModel):
     measurement_id: int
     window_index: int
     timestamp: float  # seconds from measurement start
-    ppg_data: List[float] = Field(..., description="PPG values (600 samples for 2s at 300Hz)")
+    ppg_data: List[float] = Field(..., description="PPG values (400 samples for 2s at 200Hz)")
     battery_level: Optional[int] = Field(None, ge=0, le=100, description="Battery percentage")
 
 
