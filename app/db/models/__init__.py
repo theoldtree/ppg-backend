@@ -8,6 +8,7 @@ from app.db.models.measurement import (
     QCFeedback,
     AnalysisResult,
     UserBaseline,
+    DemographicBaseline,
     Notification,
 )
 
@@ -18,5 +19,6 @@ __all__ = [
     "QCFeedback",
     "AnalysisResult",
     "UserBaseline",
+    "DemographicBaseline",
     "Notification",
 ]

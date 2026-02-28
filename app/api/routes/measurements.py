@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import List
-import random
 
 from app.db.database import get_db
 from app.db.models import Measurement, QCFeedback, AnalysisResult, UserBaseline
@@ -24,6 +23,7 @@ from app.db.schemas.measurement import (
     BatteryUpdate,
 )
 from app.services.qc_service import analyze_ppg_signal
+from app.services import analysis_service
 
 router = APIRouter()
 
@@ -201,36 +201,38 @@ async def analyze_measurement(
     ).first()
 
     if existing_analysis:
-        # Return existing analysis
         return _build_analysis_response(existing_analysis, measurement.user_id, db)
 
-    # TODO: Implement actual analysis algorithm
-    # For now, generate dummy results
-    heart_rate = random.randint(60, 90)
-    hrv_sdnn = random.uniform(30, 60)
-    stress_level = random.uniform(20, 60)
+    # ── Real analysis ────────────────────────────────────────────────────────
+    ppg_data = request.ppg_data or []
+    sampling_rate = request.sampling_rate or 200
 
-    # Determine status
-    if heart_rate <= 75 and hrv_sdnn >= 40:
-        status = "excellent"
-    elif heart_rate <= 85 and hrv_sdnn >= 30:
-        status = "good"
-    elif heart_rate <= 95:
-        status = "normal"
-    else:
-        status = "poor"
+    hr_hrv = analysis_service.compute_hr_hrv(ppg_data, sampling_rate)
+    heart_rate = hr_hrv["heart_rate"] or 72
+    hrv_sdnn = hr_hrv["hrv_sdnn"] or 40
+    hrv_rmssd = hr_hrv["hrv_rmssd"]
+    stress_level = analysis_service.compute_stress(hrv_sdnn)
+    status = analysis_service.determine_status(heart_rate, hrv_sdnn)
 
-    # Save analysis results
+    apg = analysis_service.compute_apg_indices(ppg_data, sampling_rate) if ppg_data else None
+
     analysis = AnalysisResult(
         measurement_id=request.measurement_id,
-        heart_rate=heart_rate,
-        hrv_sdnn=hrv_sdnn,
-        stress_level=stress_level,
+        heart_rate=float(heart_rate),
+        hrv_sdnn=float(hrv_sdnn),
+        hrv_rmssd=float(hrv_rmssd) if hrv_rmssd else None,
+        stress_level=float(stress_level),
         status=status,
+        apg_b_over_a=apg["b_over_a"] if apg else None,
+        apg_c_over_a=apg["c_over_a"] if apg else None,
+        apg_d_over_a=apg["d_over_a"] if apg else None,
     )
     db.add(analysis)
     db.commit()
     db.refresh(analysis)
+
+    # Update user's personal baseline
+    analysis_service.update_user_baseline(measurement.user_id, heart_rate, hrv_sdnn, db)
 
     return _build_analysis_response(analysis, measurement.user_id, db)
 
@@ -241,19 +243,16 @@ def _build_analysis_response(
     db: Session,
 ) -> AnalysisResponse:
     """
-    Build complete analysis response with personal and demographic comparisons
+    Build complete analysis response with personal and demographic comparisons.
     """
-    # Get user baseline
-    baseline = db.query(UserBaseline).filter(
-        UserBaseline.user_id == user_id
-    ).first()
+    from app.db.models.user import User
 
-    # Calculate personal comparison
+    # ── Personal comparison ──────────────────────────────────────────────────
+    baseline = db.query(UserBaseline).filter(UserBaseline.user_id == user_id).first()
+
     if baseline and baseline.avg_heart_rate:
-        hr_diff = int(analysis.heart_rate - baseline.avg_heart_rate)
-        hrv_diff = int(analysis.hrv_sdnn - baseline.avg_hrv_sdnn) if baseline.avg_hrv_sdnn else 0
-
-        # Determine trend
+        hr_diff = int(round(analysis.heart_rate - baseline.avg_heart_rate))
+        hrv_diff = int(round(analysis.hrv_sdnn - baseline.avg_hrv_sdnn)) if baseline.avg_hrv_sdnn else 0
         if hr_diff < -5 and hrv_diff > 5:
             trend = "improving"
         elif abs(hr_diff) <= 5 and abs(hrv_diff) <= 5:
@@ -265,21 +264,17 @@ def _build_analysis_response(
         hrv_diff = 0
         trend = "stable"
 
-    # Demographic comparison (dummy data for now)
-    # TODO: Calculate from actual demographic data
-    age_group_avg = random.randint(70, 80)
-    gender_group_avg = random.randint(70, 80)
+    # ── Demographic comparison ───────────────────────────────────────────────
+    user = db.query(User).filter(User.id == user_id).first()
+    birth_year = user.birth_year if user else None
+    gender = user.gender if user else None
 
-    # Calculate percentile
-    if analysis.heart_rate < age_group_avg:
-        percentile = random.randint(60, 85)
-        comparison = "above_average"
-    elif analysis.heart_rate == age_group_avg:
-        percentile = 50
-        comparison = "average"
-    else:
-        percentile = random.randint(20, 45)
-        comparison = "below_average"
+    demo = analysis_service.get_demographic_comparison(
+        heart_rate=int(analysis.heart_rate),
+        birth_year=birth_year,
+        gender=gender,
+        db=db,
+    )
 
     return AnalysisResponse(
         measurement_id=analysis.measurement_id,
@@ -295,10 +290,10 @@ def _build_analysis_response(
             trend=trend,
         ),
         demographic=DemographicComparison(
-            percentile=percentile,
-            ageGroupAvg=age_group_avg,
-            genderGroupAvg=gender_group_avg,
-            comparison=comparison,
+            percentile=demo["percentile"],
+            ageGroupAvg=demo["age_group_avg"],
+            genderGroupAvg=demo["gender_group_avg"],
+            comparison=demo["comparison"],
         ),
     )
 

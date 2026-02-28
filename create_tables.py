@@ -9,6 +9,7 @@ from app.db.models import (
     QCFeedback,
     AnalysisResult,
     UserBaseline,
+    DemographicBaseline,
     Notification,
 )
 

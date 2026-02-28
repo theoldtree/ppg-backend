@@ -154,6 +154,31 @@ class UserBaseline(Base):
         return f"<UserBaseline(user_id={self.user_id}, count={self.measurement_count})>"
 
 
+class DemographicBaseline(Base):
+    """Demographic baseline statistics for group comparison"""
+
+    __tablename__ = "demographic_baselines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    gender = Column(String(10), nullable=False)     # 'male', 'female', 'all'
+    age_group = Column(Integer, nullable=False)     # decade: 20, 30, 40, 50, 60
+
+    # Heart Rate stats (from BUT-PPG ECG-derived HR)
+    avg_heart_rate = Column(Float, nullable=True)
+    std_heart_rate = Column(Float, nullable=True)
+    sample_count = Column(Integer, default=0)
+
+    # APG b/a reference values (literature-based, Takazawa 1998 + Bortolotto 2000)
+    b_over_a_ref = Column(Float, nullable=True)
+    b_over_a_std = Column(Float, nullable=True)
+
+    source = Column(String(200), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f"<DemographicBaseline(gender='{self.gender}', age_group={self.age_group}, n={self.sample_count})>"
+
+
 class Notification(Base):
     """User notifications"""
 

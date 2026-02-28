@@ -71,6 +71,8 @@ class MeasurementCompleteResponse(BaseModel):
 class AnalysisRequest(BaseModel):
     """Request schema for analysis"""
     measurement_id: int
+    ppg_data: Optional[List[float]] = Field(None, description="Raw PPG samples collected during measurement")
+    sampling_rate: Optional[int] = Field(200, description="PPG sampling rate in Hz")
 
 
 class GeneralAnalysis(BaseModel):
