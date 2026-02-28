@@ -2,6 +2,7 @@
 Authentication API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -236,7 +237,7 @@ async def get_kakao_oauth_url():
     return {"url": auth_url}
 
 
-@router.get("/kakao/callback", response_model=TokenResponse)
+@router.get("/kakao/callback")
 async def kakao_callback(code: str, db: Session = Depends(get_db)):
     """
     Kakao OAuth callback endpoint
@@ -287,9 +288,9 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
     # Create access token
     jwt_token = create_access_token(data={"sub": str(user.id), "email": user.email})
 
-    return TokenResponse(
-        access_token=jwt_token, token_type="bearer", user=UserResponse.from_orm(user)
-    )
+    # Redirect to mobile app deep link so the app can capture the token
+    deep_link = f"ppghealth://auth/callback?access_token={jwt_token}"
+    return RedirectResponse(url=deep_link, status_code=302)
 
 
 @router.get("/google/url")
@@ -299,7 +300,7 @@ async def get_google_oauth_url():
     return {"url": auth_url}
 
 
-@router.get("/google/callback", response_model=TokenResponse)
+@router.get("/google/callback")
 async def google_callback(code: str, db: Session = Depends(get_db)):
     """
     Google OAuth callback endpoint
@@ -350,6 +351,6 @@ async def google_callback(code: str, db: Session = Depends(get_db)):
     # Create access token
     jwt_token = create_access_token(data={"sub": str(user.id), "email": user.email})
 
-    return TokenResponse(
-        access_token=jwt_token, token_type="bearer", user=UserResponse.from_orm(user)
-    )
+    # Redirect to mobile app deep link so the app can capture the token
+    deep_link = f"ppghealth://auth/callback?access_token={jwt_token}"
+    return RedirectResponse(url=deep_link, status_code=302)

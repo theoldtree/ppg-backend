@@ -11,12 +11,9 @@ from datetime import datetime
 # ============================================================================
 
 class MeasurementStart(BaseModel):
-    """Request schema for starting a measurement"""
     user_id: int = Field(..., description="User ID")
 
-
 class MeasurementStartResponse(BaseModel):
-    """Response schema after starting a measurement"""
     measurement_id: int
     started_at: datetime
     status: str
@@ -27,16 +24,13 @@ class MeasurementStartResponse(BaseModel):
 # ============================================================================
 
 class QCDataBatch(BaseModel):
-    """Batch of PPG data for QC processing"""
     measurement_id: int
     window_index: int
-    timestamp: float  # seconds from measurement start
-    ppg_data: List[float] = Field(..., description="PPG values (400 samples for 2s at 200Hz)")
-    battery_level: Optional[int] = Field(None, ge=0, le=100, description="Battery percentage")
-
+    timestamp: float
+    ppg_data: List[float] = Field(..., description="PPG values")
+    battery_level: Optional[int] = Field(None, ge=0, le=100)
 
 class QCFeedbackResponse(BaseModel):
-    """QC feedback response"""
     window_index: int
     timestamp: float
     is_acceptable: bool
@@ -51,13 +45,10 @@ class QCFeedbackResponse(BaseModel):
 # ============================================================================
 
 class MeasurementComplete(BaseModel):
-    """Request schema for completing a measurement"""
     measurement_id: int
     notes: Optional[str] = None
 
-
 class MeasurementCompleteResponse(BaseModel):
-    """Response after completing measurement"""
     measurement_id: int
     completed_at: datetime
     duration_seconds: int
@@ -69,41 +60,46 @@ class MeasurementCompleteResponse(BaseModel):
 # ============================================================================
 
 class AnalysisRequest(BaseModel):
-    """Request schema for analysis"""
     measurement_id: int
-    ppg_data: Optional[List[float]] = Field(None, description="Raw PPG samples collected during measurement")
-    sampling_rate: Optional[int] = Field(200, description="PPG sampling rate in Hz")
-
+    ppg_data: Optional[List[float]] = Field(None)
+    sampling_rate: Optional[int] = Field(200)
 
 class GeneralAnalysis(BaseModel):
-    """General health analysis"""
     heartRate: int
     hrv: int
-    stressLevel: int
+    pi: float
+    ac: float
+    dc: float
     status: str  # 'excellent', 'good', 'normal', 'poor'
 
-
 class PersonalComparison(BaseModel):
-    """Personal baseline comparison"""
     heartRateDiff: int
     hrvDiff: int
     trend: str  # 'improving', 'stable', 'declining'
 
-
 class DemographicComparison(BaseModel):
-    """Demographic group comparison"""
     percentile: int
     ageGroupAvg: int
     genderGroupAvg: int
     comparison: str  # 'above_average', 'average', 'below_average'
 
-
 class AnalysisResponse(BaseModel):
-    """Complete analysis response"""
     measurement_id: int
     general: GeneralAnalysis
     personal: PersonalComparison
     demographic: DemographicComparison
+    advice: Optional[str] = None
+
+
+# ============================================================================
+# Diary Update Schema
+# ============================================================================
+
+class DiaryUpdateRequest(BaseModel):
+    """Save diary notes, tags, advice after viewing measurement result"""
+    notes: Optional[str] = None
+    tags: Optional[List[str]] = None  # ["수면부족", "피로"]
+    advice: Optional[str] = None
 
 
 # ============================================================================
@@ -111,26 +107,26 @@ class AnalysisResponse(BaseModel):
 # ============================================================================
 
 class BatteryUpdate(BaseModel):
-    """Battery level update"""
     measurement_id: int
     battery_level: int = Field(..., ge=0, le=100)
 
 
 # ============================================================================
-# Measurement List Schemas
+# Measurement History Schema
 # ============================================================================
 
-class MeasurementListItem(BaseModel):
-    """Measurement list item for diary"""
-    id: int
-    date: str  # YYYY-MM-DD
-    time: str  # HH:mm:ss
+class MeasurementHistoryItem(BaseModel):
+    """One completed measurement record for the diary screen"""
+    id: str
+    userId: str
+    date: str        # YYYY-MM-DD
+    time: str        # HH:mm:ss
     timestamp: int
     duration: int
-    notes: Optional[str]
-    general: Optional[GeneralAnalysis]
-    personal: Optional[PersonalComparison]
-    demographic: Optional[DemographicComparison]
+    notes: Optional[str] = None
+    advice: Optional[str] = None
+    tags: Optional[List[str]] = None
+    analysis: Optional[dict] = None
 
     class Config:
         from_attributes = True

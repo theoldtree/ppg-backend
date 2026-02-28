@@ -18,6 +18,8 @@ class Measurement(Base):
     duration_seconds = Column(Integer, nullable=True)
     status = Column(String(20), default="in_progress")  # 'in_progress', 'completed', 'failed'
     notes = Column(Text, nullable=True)
+    advice = Column(Text, nullable=True)
+    tags = Column(Text, nullable=True)   # comma-separated, e.g. "수면부족,피로"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -106,6 +108,11 @@ class AnalysisResult(Base):
     apg_c_over_a = Column(Float, nullable=True)  # c/a ratio
     apg_d_over_a = Column(Float, nullable=True)  # d/a ratio
     apg_e_over_a = Column(Float, nullable=True)  # e/a ratio
+
+    # Perfusion Index
+    pi = Column(Float, nullable=True)   # AC/DC × 100 (%)
+    ac = Column(Float, nullable=True)
+    dc = Column(Float, nullable=True)
 
     # Stress estimation
     stress_level = Column(Float, nullable=True)  # 0-100
