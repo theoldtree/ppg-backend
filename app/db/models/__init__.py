@@ -10,6 +10,10 @@ from app.db.models.measurement import (
     UserBaseline,
     DemographicBaseline,
     Notification,
+    MockPPGSource,
+    MockPPGPacket,
+    MeasurementDiary,
+    MeasurementPPGData,
 )
 
 __all__ = [
@@ -21,4 +25,8 @@ __all__ = [
     "UserBaseline",
     "DemographicBaseline",
     "Notification",
+    "MockPPGSource",
+    "MockPPGPacket",
+    "MeasurementDiary",
+    "MeasurementPPGData",
 ]

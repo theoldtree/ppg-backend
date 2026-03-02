@@ -9,6 +9,7 @@ from typing import List
 
 from app.db.database import get_db
 from app.db.models import Measurement, QCFeedback, AnalysisResult, UserBaseline
+from app.db.models.measurement import MeasurementDiary, MockPPGSource, MockPPGPacket
 from app.db.schemas.measurement import (
     MeasurementStart,
     MeasurementStartResponse,
@@ -318,12 +319,19 @@ async def save_diary_entry(
     if not measurement:
         raise HTTPException(status_code=404, detail="Measurement not found")
 
+    diary = db.query(MeasurementDiary).filter(
+        MeasurementDiary.measurement_id == measurement_id
+    ).first()
+    if not diary:
+        diary = MeasurementDiary(measurement_id=measurement_id)
+        db.add(diary)
+
     if request.notes is not None:
-        measurement.notes = request.notes
+        diary.notes = request.notes
     if request.advice is not None:
-        measurement.advice = request.advice
+        diary.advice = request.advice
     if request.tags is not None:
-        measurement.tags = ",".join(request.tags)
+        diary.tags = ",".join(request.tags)
 
     db.commit()
     return {"status": "saved"}
@@ -402,7 +410,11 @@ async def get_measurement_history(
                 },
             }
 
-        tags_list = [t for t in (m.tags or "").split(",") if t] if m.tags else []
+        diary = db.query(MeasurementDiary).filter(
+            MeasurementDiary.measurement_id == m.id
+        ).first()
+        tags_raw = (diary.tags if diary else m.tags) or ""
+        tags_list = [t for t in tags_raw.split(",") if t]
         items.append(MeasurementHistoryItem(
             id=str(m.id),
             userId=str(m.user_id),
@@ -410,8 +422,8 @@ async def get_measurement_history(
             time=started.strftime("%H:%M:%S"),
             timestamp=int(started.timestamp() * 1000),
             duration=m.duration_seconds or 60,
-            notes=m.notes,
-            advice=m.advice,
+            notes=diary.notes if diary else m.notes,
+            advice=diary.advice if diary else m.advice,
             tags=tags_list,
             analysis=analysis_dict,
         ))
@@ -432,3 +444,58 @@ async def update_battery(
     if not measurement:
         raise HTTPException(status_code=404, detail="Measurement not found")
     return {"measurement_id": request.measurement_id, "battery_level": request.battery_level, "status": "updated"}
+
+
+# ── Mock PPG packets ───────────────────────────────────────────────────────────
+
+@router.get("/mock-sources", response_model=List[dict])
+async def list_mock_sources(db: Session = Depends(get_db)):
+    """List all seeded mock PPG source recordings."""
+    sources = db.query(MockPPGSource).order_by(MockPPGSource.id).all()
+    return [
+        {
+            "id": s.id,
+            "record_id": s.record_id,
+            "hr_ref": s.hr_ref,
+            "format": s.format,
+            "packet_count": db.query(MockPPGPacket).filter(MockPPGPacket.source_id == s.id).count(),
+        }
+        for s in sources
+    ]
+
+
+@router.get("/mock-packets/{source_id}", response_model=List[dict])
+async def get_mock_packets(
+    source_id: int,
+    offset: int = 0,
+    limit: int = 300,
+    db: Session = Depends(get_db),
+):
+    """
+    Return BLE-structured mock PPG packets for a given source recording.
+    Each packet represents a 20-byte BLE frame (sync + index + 15B PPG + battery + crc).
+    offset/limit allow streaming in chunks during simulated BLE replay.
+    """
+    source = db.query(MockPPGSource).filter(MockPPGSource.id == source_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Mock source not found")
+
+    packets = (
+        db.query(MockPPGPacket)
+        .filter(MockPPGPacket.source_id == source_id)
+        .order_by(MockPPGPacket.packet_index)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "packet_index": p.packet_index,
+            "sync_byte": p.sync_byte,
+            "packet_bytes": list(p.packet_bytes),   # 15 bytes as int array
+            "battery_level": p.battery_level,
+            "crc": p.crc,
+        }
+        for p in packets
+    ]

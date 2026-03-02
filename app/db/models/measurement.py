@@ -1,9 +1,93 @@
 """
 Measurement and related models
 """
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, func
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, LargeBinary, func
 from sqlalchemy.orm import relationship
 from app.db.database import Base
+
+
+class MockPPGSource(Base):
+    """BUT-PPG dataset recording metadata (one row per BUT-PPG recording)"""
+
+    __tablename__ = "mock_ppg_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    record_id = Column(String(50), unique=True, nullable=False)   # e.g. "100001", "121040"
+    hr_ref = Column(Float, nullable=True)     # ECG-derived HR from quality-hr-ann.csv
+    quality = Column(Integer, default=1)      # 1 = acceptable (from quality-hr-ann.csv)
+    format = Column(String(1), nullable=True) # 'A' (gain-encoded) or 'B' (interleaved)
+    gender = Column(String(10), nullable=True)
+    age = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    packets = relationship("MockPPGPacket", back_populates="source", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<MockPPGSource(id={self.id}, record_id='{self.record_id}', hr_ref={self.hr_ref})>"
+
+
+class MockPPGPacket(Base):
+    """BLE-packet-shaped PPG data derived from BUT-PPG (12 × 10-bit samples per row)"""
+
+    __tablename__ = "mock_ppg_packets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_id = Column(Integer, ForeignKey("mock_ppg_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    packet_index = Column(Integer, nullable=False)   # sequential within recording
+    sync_byte = Column(Integer, default=0xAA)        # fixed sync marker
+    packet_bytes = Column(LargeBinary(15), nullable=False)  # 12 × 10-bit packed into 15 bytes
+    battery_level = Column(Integer, default=100)     # 0–100 %
+    crc = Column(Integer, nullable=True)             # simple checksum
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationship
+    source = relationship("MockPPGSource", back_populates="packets")
+
+    def __repr__(self):
+        return f"<MockPPGPacket(id={self.id}, source_id={self.source_id}, idx={self.packet_index})>"
+
+
+class MeasurementDiary(Base):
+    """Diary entry linked to a measurement (user-annotated after viewing result)"""
+
+    __tablename__ = "measurement_diary"
+
+    id = Column(Integer, primary_key=True, index=True)
+    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False, unique=True)
+    notes = Column(Text, nullable=True)
+    tags = Column(Text, nullable=True)    # comma-separated, e.g. "수면부족,피로"
+    advice = Column(Text, nullable=True)  # auto-generated advice text shown to user
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationship
+    measurement = relationship("Measurement", back_populates="diary")
+
+    def __repr__(self):
+        return f"<MeasurementDiary(id={self.id}, measurement_id={self.measurement_id})>"
+
+
+class MeasurementPPGData(Base):
+    """Raw PPG packet data for real (non-mock) BLE measurements"""
+
+    __tablename__ = "measurement_ppg"
+
+    id = Column(Integer, primary_key=True, index=True)
+    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False, index=True)
+    packet_index = Column(Integer, nullable=False)
+    sync_byte = Column(Integer, nullable=True)
+    packet_bytes = Column(LargeBinary(15), nullable=False)  # 12 × 10-bit packed into 15 bytes
+    battery_level = Column(Integer, nullable=True)
+    crc = Column(Integer, nullable=True)
+    received_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationship
+    measurement = relationship("Measurement", back_populates="ppg_packets")
+
+    def __repr__(self):
+        return f"<MeasurementPPGData(id={self.id}, measurement_id={self.measurement_id}, idx={self.packet_index})>"
 
 
 class Measurement(Base):
@@ -13,6 +97,7 @@ class Measurement(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    mock_source_id = Column(Integer, ForeignKey("mock_ppg_sources.id", ondelete="SET NULL"), nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Integer, nullable=True)
@@ -26,6 +111,8 @@ class Measurement(Base):
     ppg_data = relationship("PPGProcessedData", back_populates="measurement", cascade="all, delete-orphan")
     qc_feedback = relationship("QCFeedback", back_populates="measurement", cascade="all, delete-orphan")
     analysis_results = relationship("AnalysisResult", back_populates="measurement", cascade="all, delete-orphan")
+    diary = relationship("MeasurementDiary", back_populates="measurement", uselist=False, cascade="all, delete-orphan")
+    ppg_packets = relationship("MeasurementPPGData", back_populates="measurement", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Measurement(id={self.id}, user_id={self.user_id}, status='{self.status}')>"
