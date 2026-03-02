@@ -254,11 +254,16 @@ def get_demographic_comparison(
     else:
         comparison = "below_average"
 
+    b_over_a_ref = float(baseline.b_over_a_ref) if baseline and baseline.b_over_a_ref is not None else None
+    b_over_a_std = float(baseline.b_over_a_std) if baseline and baseline.b_over_a_std is not None else None
+
     return {
         "percentile": percentile,
         "age_group_avg": age_avg,
         "gender_group_avg": gender_avg,
         "comparison": comparison,
+        "apg_b_over_a_ref": b_over_a_ref,
+        "apg_b_over_a_std": b_over_a_std,
     }
 
 

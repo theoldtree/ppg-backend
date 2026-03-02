@@ -105,6 +105,7 @@ class Measurement(Base):
     notes = Column(Text, nullable=True)
     advice = Column(Text, nullable=True)
     tags = Column(Text, nullable=True)   # comma-separated, e.g. "수면부족,피로"
+    is_dev = Column(Boolean, default=False, nullable=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -279,11 +280,13 @@ class Notification(Base):
     __tablename__ = "notifications"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = Column(String(50), nullable=False, default="measurement_complete")
     title = Column(String(255), nullable=False)
     message = Column(Text, nullable=True)
+    data_json = Column(Text, nullable=True)   # JSON string for type-specific payload
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     def __repr__(self):
-        return f"<Notification(id={self.id}, user_id={self.user_id}, read={self.is_read})>"
+        return f"<Notification(id={self.id}, user_id={self.user_id}, type={self.type}, read={self.is_read})>"

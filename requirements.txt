@@ -26,3 +26,6 @@ fastapi-cors==0.0.6
 
 # Environment variables
 python-dotenv==1.0.0
+
+# Background scheduler
+apscheduler>=3.10.0

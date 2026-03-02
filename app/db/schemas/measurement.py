@@ -12,6 +12,7 @@ from datetime import datetime
 
 class MeasurementStart(BaseModel):
     user_id: int = Field(..., description="User ID")
+    is_dev: bool = Field(False, description="Dev/test measurement — excluded from baselines")
 
 class MeasurementStartResponse(BaseModel):
     measurement_id: int
@@ -66,10 +67,13 @@ class AnalysisRequest(BaseModel):
 
 class GeneralAnalysis(BaseModel):
     heartRate: int
-    hrv: int
+    hrv: int         # SDNN ms
+    hrvRmssd: Optional[int] = None   # RMSSD ms
     pi: float
     ac: float
     dc: float
+    apgBOverA: Optional[float] = None  # b/a ratio (arterial stiffness)
+    apgAI: Optional[float] = None      # aging index
     status: str  # 'excellent', 'good', 'normal', 'poor'
 
 class PersonalComparison(BaseModel):
@@ -82,6 +86,8 @@ class DemographicComparison(BaseModel):
     ageGroupAvg: int
     genderGroupAvg: int
     comparison: str  # 'above_average', 'average', 'below_average'
+    apgBOverARef: Optional[float] = None   # Takazawa reference b/a for this age/gender
+    apgBOverAStd: Optional[float] = None   # std of reference
 
 class AnalysisResponse(BaseModel):
     measurement_id: int

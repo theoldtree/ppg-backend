@@ -14,6 +14,7 @@ BUT-PPG → mock_ppg_sources / mock_ppg_packets DB seed script
   DB에는 PPG(15B)만 packet_bytes에 저장; sync/battery/crc는 별도 컬럼.
 """
 
+from __future__ import annotations
 import os, sys, struct, csv, json
 
 # ── 경로 설정 ──────────────────────────────────────────────────────────────────

@@ -71,8 +71,10 @@ def upgrade() -> None:
         sa.Column('received_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
-    # Add mock_source_id FK to measurements
-    op.add_column('measurements', sa.Column('mock_source_id', sa.Integer(), sa.ForeignKey('mock_ppg_sources.id', ondelete='SET NULL'), nullable=True))
+    # Add mock_source_id to measurements
+    # SQLite doesn't support adding FK constraints via ALTER TABLE — use batch mode
+    with op.batch_alter_table('measurements') as batch_op:
+        batch_op.add_column(sa.Column('mock_source_id', sa.Integer(), nullable=True))
 
 
 def downgrade() -> None:

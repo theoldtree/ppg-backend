@@ -4,7 +4,9 @@ Measurement endpoints
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+KST = timezone(timedelta(hours=9))
 from typing import List
 
 from app.db.database import get_db
@@ -28,6 +30,7 @@ from app.db.schemas.measurement import (
 )
 from app.services.qc_service import analyze_ppg_signal
 from app.services import analysis_service
+from app.services.notification_service import create_measurement_complete_notification
 from app.core.security import decode_access_token
 
 router = APIRouter()
@@ -63,6 +66,7 @@ async def start_measurement(
         user_id=request.user_id,
         started_at=datetime.now(timezone.utc),
         status="in_progress",
+        is_dev=request.is_dev,
     )
     db.add(measurement)
     db.commit()
@@ -151,11 +155,16 @@ async def complete_measurement(
     if measurement.status == "completed":
         raise HTTPException(status_code=400, detail="Measurement already completed")
 
-    measurement.completed_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    measurement.completed_at = now
     measurement.status = "completed"
     measurement.notes = request.notes
-    duration = (measurement.completed_at - measurement.started_at).total_seconds()
-    measurement.duration_seconds = int(duration)
+    # SQLite stores naive datetimes — strip tzinfo before subtraction
+    started = measurement.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    duration = (now - started).total_seconds()
+    measurement.duration_seconds = max(1, int(duration))
     db.commit()
     db.refresh(measurement)
 
@@ -224,8 +233,25 @@ async def analyze_measurement(
     db.commit()
     db.refresh(analysis)
 
-    analysis_service.update_user_baseline(measurement.user_id, heart_rate, hrv_sdnn, db)
-    return _build_analysis_response(analysis, measurement, db)
+    if not measurement.is_dev:
+        analysis_service.update_user_baseline(measurement.user_id, heart_rate, hrv_sdnn, db)
+    response = _build_analysis_response(analysis, measurement, db)
+
+    # Trigger measurement_complete notification
+    try:
+        create_measurement_complete_notification(
+            db=db,
+            user_id=measurement.user_id,
+            heart_rate=int(heart_rate),
+            hrv=int(hrv_sdnn),
+            status=status,
+            percentile=response.demographic.percentile,
+            measurement_id=request.measurement_id,
+        )
+    except Exception:
+        pass  # Never block analysis response due to notification failure
+
+    return response
 
 
 def _build_analysis_response(
@@ -282,9 +308,12 @@ def _build_analysis_response(
         general=GeneralAnalysis(
             heartRate=int(analysis.heart_rate),
             hrv=int(analysis.hrv_sdnn),
+            hrvRmssd=int(round(analysis.hrv_rmssd)) if analysis.hrv_rmssd is not None else None,
             pi=round(float(analysis.pi or 0), 2),
             ac=round(float(analysis.ac or 0), 2),
             dc=round(float(analysis.dc or 0), 2),
+            apgBOverA=round(float(analysis.apg_b_over_a), 3) if analysis.apg_b_over_a is not None else None,
+            apgAI=round(float(analysis.apg_d_over_a - analysis.apg_c_over_a), 3) if (analysis.apg_d_over_a is not None and analysis.apg_c_over_a is not None) else None,
             status=analysis.status,
         ),
         personal=PersonalComparison(
@@ -297,6 +326,8 @@ def _build_analysis_response(
             ageGroupAvg=demo["age_group_avg"],
             genderGroupAvg=demo["gender_group_avg"],
             comparison=demo["comparison"],
+            apgBOverARef=demo.get("apg_b_over_a_ref"),
+            apgBOverAStd=demo.get("apg_b_over_a_std"),
         ),
         advice=advice,
     )
@@ -361,7 +392,11 @@ async def get_measurement_history(
             AnalysisResult.measurement_id == m.id
         ).first()
 
-        started = m.started_at
+        started_utc = m.started_at
+        # started_at is stored as UTC; convert to KST for date/time display
+        if started_utc.tzinfo is None:
+            started_utc = started_utc.replace(tzinfo=timezone.utc)
+        started = started_utc.astimezone(KST)
         analysis_dict = None
         if analysis_result:
             # Personal comparison
@@ -388,13 +423,21 @@ async def get_measurement_history(
                 db=db,
             )
 
+            apg_ai = (
+                round(float(analysis_result.apg_d_over_a - analysis_result.apg_c_over_a), 3)
+                if (analysis_result.apg_d_over_a is not None and analysis_result.apg_c_over_a is not None)
+                else None
+            )
             analysis_dict = {
                 "general": {
                     "heartRate": int(analysis_result.heart_rate),
                     "hrv": int(analysis_result.hrv_sdnn),
+                    "hrvRmssd": int(round(analysis_result.hrv_rmssd)) if analysis_result.hrv_rmssd is not None else None,
                     "pi": round(float(analysis_result.pi or 0), 2),
                     "ac": round(float(analysis_result.ac or 0), 2),
                     "dc": round(float(analysis_result.dc or 0), 2),
+                    "apgBOverA": round(float(analysis_result.apg_b_over_a), 3) if analysis_result.apg_b_over_a is not None else None,
+                    "apgAI": apg_ai,
                     "status": analysis_result.status,
                 },
                 "personal": {
@@ -407,6 +450,8 @@ async def get_measurement_history(
                     "ageGroupAvg": demo["age_group_avg"],
                     "genderGroupAvg": demo["gender_group_avg"],
                     "comparison": demo["comparison"],
+                    "apgBOverARef": demo.get("apg_b_over_a_ref"),
+                    "apgBOverAStd": demo.get("apg_b_over_a_std"),
                 },
             }
 
