@@ -72,7 +72,7 @@ def weekly_report() -> None:
     """Compute last-week stats and create weekly_report notifications."""
     from app.db.models.measurement import Notification
     from app.db.models.user import User
-    from app.db.models import Measurement, AnalysisResult
+    from app.db.models import Measurement
     from app.services.notification_service import create_weekly_report_notification
 
     db = _get_db_session()
@@ -85,11 +85,11 @@ def weekly_report() -> None:
         for user in all_users:
             # Measurements this past week
             this_week = (
-                db.query(AnalysisResult)
-                .join(Measurement, Measurement.id == AnalysisResult.measurement_id)
+                db.query(Measurement)
                 .filter(
                     Measurement.user_id == user.id,
                     Measurement.status == "completed",
+                    Measurement.heart_rate.isnot(None),
                     Measurement.completed_at >= this_week_start,
                 )
                 .all()
@@ -97,22 +97,22 @@ def weekly_report() -> None:
             if not this_week:
                 continue  # No data this week — skip report
 
-            avg_hr = sum(a.heart_rate for a in this_week) / len(this_week)
+            avg_hr = sum(m.heart_rate for m in this_week) / len(this_week)
 
             # Previous week avg for comparison
             prev_week = (
-                db.query(AnalysisResult)
-                .join(Measurement, Measurement.id == AnalysisResult.measurement_id)
+                db.query(Measurement)
                 .filter(
                     Measurement.user_id == user.id,
                     Measurement.status == "completed",
+                    Measurement.heart_rate.isnot(None),
                     Measurement.completed_at >= prev_week_start,
                     Measurement.completed_at < this_week_start,
                 )
                 .all()
             )
             prev_avg_hr = (
-                sum(a.heart_rate for a in prev_week) / len(prev_week) if prev_week else None
+                sum(m.heart_rate for m in prev_week) / len(prev_week) if prev_week else None
             )
 
             create_weekly_report_notification(

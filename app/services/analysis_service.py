@@ -11,7 +11,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict, Any
 from sqlalchemy.orm import Session
 
-from app.db.models import AnalysisResult, UserBaseline, DemographicBaseline
+from app.db.models import UserBaseline, DemographicBaseline
 
 
 # ── HR / HRV ─────────────────────────────────────────────────────────────────
@@ -232,9 +232,12 @@ def get_demographic_comparison(
         # Last fallback: all, age_group 30
         baseline = _query_baseline(db, "all", 30)
 
-    if baseline and baseline.avg_heart_rate and baseline.std_heart_rate:
+    if baseline and baseline.avg_heart_rate:
         avg_hr = baseline.avg_heart_rate
-        std_hr = max(baseline.std_heart_rate, 1.0)
+        # Prefer live Welford std; fall back to seeded std_heart_rate
+        n = baseline.sample_count or 0
+        live_std = _welford_std(baseline.m2_heart_rate, n)
+        std_hr = max(live_std or baseline.std_heart_rate or 10.0, 1.0)
         z = (heart_rate - avg_hr) / std_hr
         # Higher HR → lower (worse) percentile
         from scipy.stats import norm as scipy_norm
@@ -257,6 +260,12 @@ def get_demographic_comparison(
     b_over_a_ref = float(baseline.b_over_a_ref) if baseline and baseline.b_over_a_ref is not None else None
     b_over_a_std = float(baseline.b_over_a_std) if baseline and baseline.b_over_a_std is not None else None
 
+    # HRV percentile (if hrv_sdnn provided)
+    # NOTE: not currently used in function signature — kept for future use
+    # The hrv stats are returned for use in the frontend
+    hrv_avg = float(baseline.avg_hrv_sdnn) if baseline and baseline.avg_hrv_sdnn else None
+    hrv_std = float(baseline.std_hrv_sdnn) if baseline and baseline.std_hrv_sdnn else None
+
     return {
         "percentile": percentile,
         "age_group_avg": age_avg,
@@ -264,6 +273,8 @@ def get_demographic_comparison(
         "comparison": comparison,
         "apg_b_over_a_ref": b_over_a_ref,
         "apg_b_over_a_std": b_over_a_std,
+        "avg_hrv_sdnn": int(round(hrv_avg)) if hrv_avg else None,
+        "std_hrv_sdnn": int(round(hrv_std)) if hrv_std else None,
     }
 
 
@@ -302,7 +313,43 @@ def _query_baseline(
     )
 
 
-# ── Update user baseline ──────────────────────────────────────────────────────
+# ── Welford helpers ───────────────────────────────────────────────────────────
+
+def _welford_update(
+    n: int,
+    mean: Optional[float],
+    m2: Optional[float],
+    new_value: float,
+) -> tuple[int, float, float]:
+    """
+    Welford's online algorithm — O(1) mean + variance update.
+
+    Returns (new_n, new_mean, new_M2).
+    std = sqrt(M2 / (n - 1))  for n >= 2.
+
+    Reference: Welford 1962 / Knuth TAOCP vol.2 §4.2.2
+    """
+    n += 1
+    if mean is None:
+        mean = 0.0
+    if m2 is None:
+        m2 = 0.0
+    delta  = new_value - mean
+    mean  += delta / n
+    delta2 = new_value - mean          # use updated mean
+    m2    += delta * delta2
+    return n, mean, m2
+
+
+def _welford_std(m2: Optional[float], n: int) -> Optional[float]:
+    """Compute std from Welford M2. Returns None if n < 2."""
+    if m2 is None or n < 2:
+        return None
+    import math
+    return math.sqrt(m2 / (n - 1))
+
+
+# ── Update user baseline (Welford) ────────────────────────────────────────────
 
 def update_user_baseline(
     user_id: int,
@@ -311,33 +358,89 @@ def update_user_baseline(
     db: Session,
 ) -> None:
     """
-    Incrementally update rolling average for the user's personal baseline.
-    Uses simple exponential moving average with α = 1/n (capped at 0.1).
+    Incrementally update personal baseline using Welford's online algorithm.
+    Computes exact mean and standard deviation without storing raw values.
     """
     baseline = db.query(UserBaseline).filter(UserBaseline.user_id == user_id).first()
     if baseline is None:
         baseline = UserBaseline(
             user_id=user_id,
             avg_heart_rate=float(heart_rate),
-            avg_hrv_sdnn=float(hrv_sdnn) if hrv_sdnn else None,
+            m2_heart_rate=0.0,
+            avg_hrv_sdnn=float(hrv_sdnn) if hrv_sdnn is not None else None,
+            m2_hrv_sdnn=0.0 if hrv_sdnn is not None else None,
+            std_heart_rate=None,
+            std_hrv_sdnn=None,
             measurement_count=1,
         )
         db.add(baseline)
     else:
-        n = (baseline.measurement_count or 0) + 1
-        alpha = max(0.1, 1.0 / n)
+        n = baseline.measurement_count or 0
 
-        if baseline.avg_heart_rate is not None:
-            baseline.avg_heart_rate = (1 - alpha) * baseline.avg_heart_rate + alpha * heart_rate
-        else:
-            baseline.avg_heart_rate = float(heart_rate)
+        # HR — Welford update
+        n_new, mean_hr, m2_hr = _welford_update(
+            n, baseline.avg_heart_rate, baseline.m2_heart_rate, float(heart_rate)
+        )
+        baseline.avg_heart_rate = mean_hr
+        baseline.m2_heart_rate  = m2_hr
+        baseline.std_heart_rate = _welford_std(m2_hr, n_new)
+
+        # HRV SDNN — Welford update (only if provided)
+        if hrv_sdnn is not None:
+            _, mean_hrv, m2_hrv = _welford_update(
+                n, baseline.avg_hrv_sdnn, baseline.m2_hrv_sdnn, float(hrv_sdnn)
+            )
+            baseline.avg_hrv_sdnn = mean_hrv
+            baseline.m2_hrv_sdnn  = m2_hrv
+            baseline.std_hrv_sdnn = _welford_std(m2_hrv, n_new)
+
+        baseline.measurement_count = n_new
+
+    db.commit()
+
+
+# ── Update demographic baseline (Welford) ────────────────────────────────────
+
+def update_demographic_baseline(
+    heart_rate: int,
+    hrv_sdnn: Optional[float],
+    birth_year: Optional[int],
+    gender: Optional[str],
+    db: Session,
+) -> None:
+    """
+    Update the matching demographic baseline row with Welford online algorithm.
+    Called after each real (non-dev) measurement so group statistics improve
+    over time without reading all historical data.
+    """
+    from datetime import date
+    age = (date.today().year - birth_year) if birth_year else None
+    age_group = _age_to_group(age)
+    norm_gender = _normalize_gender(gender)
+
+    # Update both gender-specific and "all" rows
+    targets = [(norm_gender, age_group), ("all", age_group)]
+    for g, ag in targets:
+        row = _query_baseline(db, g, ag)
+        if row is None:
+            continue
+
+        n = row.sample_count or 0
+
+        n_new, mean_hr, m2_hr = _welford_update(
+            n, row.avg_heart_rate, row.m2_heart_rate, float(heart_rate)
+        )
+        row.avg_heart_rate = round(mean_hr, 2)
+        row.m2_heart_rate  = m2_hr
+        row.std_heart_rate = round(_welford_std(m2_hr, n_new) or row.std_heart_rate or 10.0, 2)
+        row.sample_count   = n_new
 
         if hrv_sdnn is not None:
-            if baseline.avg_hrv_sdnn is not None:
-                baseline.avg_hrv_sdnn = (1 - alpha) * baseline.avg_hrv_sdnn + alpha * hrv_sdnn
-            else:
-                baseline.avg_hrv_sdnn = float(hrv_sdnn)
-
-        baseline.measurement_count = n
+            _, mean_hrv, m2_hrv = _welford_update(
+                n, row.avg_hrv_sdnn, row.m2_hrv_sdnn, float(hrv_sdnn)
+            )
+            row.avg_hrv_sdnn = round(mean_hrv, 2)
+            row.m2_hrv_sdnn  = m2_hrv
+            row.std_hrv_sdnn = round(_welford_std(m2_hrv, n_new) or row.std_hrv_sdnn or 10.0, 2)
 
     db.commit()

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Import our models and config
 from app.db.database import Base
-from app.db.models import User, Measurement, PPGProcessedData, QCFeedback, AnalysisResult, UserBaseline, Notification
+from app.db.models import User, Measurement, QCFeedback, UserBaseline, Notification
 from app.core.config import settings
 
 # this is the Alembic Config object, which provides

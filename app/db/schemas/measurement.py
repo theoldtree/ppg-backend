@@ -65,6 +65,21 @@ class AnalysisRequest(BaseModel):
     ppg_data: Optional[List[float]] = Field(None)
     sampling_rate: Optional[int] = Field(200)
 
+class SaveMockAnalysisRequest(BaseModel):
+    """Accept pre-computed analysis values directly (for mock/dev mode)."""
+    heart_rate: int
+    hrv_sdnn: int
+    hrv_rmssd: Optional[int] = None
+    pi: float
+    ac: float
+    dc: float
+    apg_b_over_a: Optional[float] = None
+    apg_ai: Optional[float] = None
+    status: str  # 'excellent', 'good', 'normal', 'poor'
+    percentile: int
+    age_group_avg: int
+    gender_group_avg: int
+
 class GeneralAnalysis(BaseModel):
     heartRate: int
     hrv: int         # SDNN ms
@@ -88,6 +103,8 @@ class DemographicComparison(BaseModel):
     comparison: str  # 'above_average', 'average', 'below_average'
     apgBOverARef: Optional[float] = None   # Takazawa reference b/a for this age/gender
     apgBOverAStd: Optional[float] = None   # std of reference
+    hrvPercentile: Optional[int] = None    # NEW
+    avgHrvSdnn: Optional[int] = None       # NEW
 
 class AnalysisResponse(BaseModel):
     measurement_id: int

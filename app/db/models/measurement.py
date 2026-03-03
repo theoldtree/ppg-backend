@@ -6,272 +6,134 @@ from sqlalchemy.orm import relationship
 from app.db.database import Base
 
 
-class MockPPGSource(Base):
-    """BUT-PPG dataset recording metadata (one row per BUT-PPG recording)"""
-
-    __tablename__ = "mock_ppg_sources"
-
-    id = Column(Integer, primary_key=True, index=True)
-    record_id = Column(String(50), unique=True, nullable=False)   # e.g. "100001", "121040"
-    hr_ref = Column(Float, nullable=True)     # ECG-derived HR from quality-hr-ann.csv
-    quality = Column(Integer, default=1)      # 1 = acceptable (from quality-hr-ann.csv)
-    format = Column(String(1), nullable=True) # 'A' (gain-encoded) or 'B' (interleaved)
-    gender = Column(String(10), nullable=True)
-    age = Column(Integer, nullable=True)
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    packets = relationship("MockPPGPacket", back_populates="source", cascade="all, delete-orphan")
-
-    def __repr__(self):
-        return f"<MockPPGSource(id={self.id}, record_id='{self.record_id}', hr_ref={self.hr_ref})>"
-
-
-class MockPPGPacket(Base):
-    """BLE-packet-shaped PPG data derived from BUT-PPG (12 × 10-bit samples per row)"""
-
-    __tablename__ = "mock_ppg_packets"
-
-    id = Column(Integer, primary_key=True, index=True)
-    source_id = Column(Integer, ForeignKey("mock_ppg_sources.id", ondelete="CASCADE"), nullable=False, index=True)
-    packet_index = Column(Integer, nullable=False)   # sequential within recording
-    sync_byte = Column(Integer, default=0xAA)        # fixed sync marker
-    packet_bytes = Column(LargeBinary(15), nullable=False)  # 12 × 10-bit packed into 15 bytes
-    battery_level = Column(Integer, default=100)     # 0–100 %
-    crc = Column(Integer, nullable=True)             # simple checksum
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationship
-    source = relationship("MockPPGSource", back_populates="packets")
-
-    def __repr__(self):
-        return f"<MockPPGPacket(id={self.id}, source_id={self.source_id}, idx={self.packet_index})>"
-
-
-class MeasurementDiary(Base):
-    """Diary entry linked to a measurement (user-annotated after viewing result)"""
-
-    __tablename__ = "measurement_diary"
-
-    id = Column(Integer, primary_key=True, index=True)
-    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False, unique=True)
-    notes = Column(Text, nullable=True)
-    tags = Column(Text, nullable=True)    # comma-separated, e.g. "수면부족,피로"
-    advice = Column(Text, nullable=True)  # auto-generated advice text shown to user
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    # Relationship
-    measurement = relationship("Measurement", back_populates="diary")
-
-    def __repr__(self):
-        return f"<MeasurementDiary(id={self.id}, measurement_id={self.measurement_id})>"
-
-
-class MeasurementPPGData(Base):
-    """Raw PPG packet data for real (non-mock) BLE measurements"""
-
-    __tablename__ = "measurement_ppg"
-
-    id = Column(Integer, primary_key=True, index=True)
-    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False, index=True)
-    packet_index = Column(Integer, nullable=False)
-    sync_byte = Column(Integer, nullable=True)
-    packet_bytes = Column(LargeBinary(15), nullable=False)  # 12 × 10-bit packed into 15 bytes
-    battery_level = Column(Integer, nullable=True)
-    crc = Column(Integer, nullable=True)
-    received_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationship
-    measurement = relationship("Measurement", back_populates="ppg_packets")
-
-    def __repr__(self):
-        return f"<MeasurementPPGData(id={self.id}, measurement_id={self.measurement_id}, idx={self.packet_index})>"
-
-
 class Measurement(Base):
-    """Measurement session"""
+    """
+    Core measurement record — session metadata + analysis results + diary notes.
+    All 1:1 child tables (analysis_results, measurement_diary) have been merged here.
+    """
 
     __tablename__ = "measurements"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    mock_source_id = Column(Integer, ForeignKey("mock_ppg_sources.id", ondelete="SET NULL"), nullable=True)
-    started_at = Column(DateTime(timezone=True), nullable=False)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
+    # ── Session ───────────────────────────────────────────────────────────────
+    id               = Column(Integer, primary_key=True, index=True)
+    user_id          = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    mock_source_id   = Column(Integer, ForeignKey("mock_ppg_sources.id", ondelete="SET NULL"), nullable=True)
+    started_at       = Column(DateTime(timezone=True), nullable=False)
+    completed_at     = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Integer, nullable=True)
-    status = Column(String(20), default="in_progress")  # 'in_progress', 'completed', 'failed'
-    notes = Column(Text, nullable=True)
-    advice = Column(Text, nullable=True)
-    tags = Column(Text, nullable=True)   # comma-separated, e.g. "수면부족,피로"
-    is_dev = Column(Boolean, default=False, nullable=False, server_default="0")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    status           = Column(String(20), default="in_progress")  # in_progress / completed / failed
+    is_dev           = Column(Boolean, default=False, nullable=False, server_default="0")
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationships
-    ppg_data = relationship("PPGProcessedData", back_populates="measurement", cascade="all, delete-orphan")
+    # ── Analysis (merged from analysis_results) ───────────────────────────────
+    heart_rate    = Column(Float, nullable=True)   # bpm
+    hrv_sdnn      = Column(Float, nullable=True)   # ms SDNN
+    hrv_rmssd     = Column(Float, nullable=True)   # ms RMSSD
+    pi            = Column(Float, nullable=True)   # Perfusion Index (%)
+    ac            = Column(Float, nullable=True)   # AC amplitude
+    dc            = Column(Float, nullable=True)   # DC level
+    apg_b_over_a  = Column(Float, nullable=True)   # APG b/a (arterial stiffness)
+    apg_c_over_a  = Column(Float, nullable=True)
+    apg_d_over_a  = Column(Float, nullable=True)
+    stress_level  = Column(Float, nullable=True)   # 0–100
+    result_status = Column(String(20), nullable=True)  # excellent / good / normal / poor
+
+    # ── Diary (merged from measurement_diary; notes/tags/advice already existed) ─
+    notes  = Column(Text, nullable=True)
+    tags   = Column(Text, nullable=True)    # comma-separated, e.g. "수면부족,피로"
+    advice = Column(Text, nullable=True)    # auto-generated advice
+
+    # ── Relationships ─────────────────────────────────────────────────────────
     qc_feedback = relationship("QCFeedback", back_populates="measurement", cascade="all, delete-orphan")
-    analysis_results = relationship("AnalysisResult", back_populates="measurement", cascade="all, delete-orphan")
-    diary = relationship("MeasurementDiary", back_populates="measurement", uselist=False, cascade="all, delete-orphan")
-    ppg_packets = relationship("MeasurementPPGData", back_populates="measurement", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Measurement(id={self.id}, user_id={self.user_id}, status='{self.status}')>"
 
 
-class PPGProcessedData(Base):
-    """Processed PPG data storage"""
-
-    __tablename__ = "ppg_processed_data"
-
-    id = Column(Integer, primary_key=True, index=True)
-    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False)
-    window_start = Column(Float, nullable=False)  # seconds from measurement start
-    window_end = Column(Float, nullable=False)
-    window_type = Column(String(20), nullable=False)  # 'qc' or 'analysis'
-
-    # Processed metrics
-    mean_value = Column(Float, nullable=True)
-    std_dev = Column(Float, nullable=True)
-    peak_count = Column(Integer, nullable=True)
-    snr = Column(Float, nullable=True)  # Signal-to-Noise Ratio
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationship
-    measurement = relationship("Measurement", back_populates="ppg_data")
-
-    def __repr__(self):
-        return f"<PPGProcessedData(id={self.id}, window={self.window_start}-{self.window_end})>"
-
-
 class QCFeedback(Base):
-    """Quality Control feedback"""
+    """Quality Control feedback (real-time signal quality per window during measurement)"""
 
     __tablename__ = "qc_feedback"
 
-    id = Column(Integer, primary_key=True, index=True)
-    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False)
-    window_index = Column(Integer, nullable=False)
-    timestamp = Column(Float, nullable=False)  # seconds from measurement start
+    id              = Column(Integer, primary_key=True, index=True)
+    measurement_id  = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False)
+    window_index    = Column(Integer, nullable=False)
+    timestamp       = Column(Float, nullable=False)   # seconds from measurement start
 
-    # QC metrics
-    is_acceptable = Column(Boolean, default=True)
-    snr = Column(Float, nullable=True)
-    peak_count = Column(Integer, nullable=True)
+    is_acceptable   = Column(Boolean, default=True)
+    snr             = Column(Float, nullable=True)
+    peak_count      = Column(Integer, nullable=True)
     amplitude_range = Column(Float, nullable=True)
-    noise_level = Column(Float, nullable=True)
-    signal_stability = Column(Float, nullable=True)
-
-    # Feedback message
-    feedback_message = Column(String(255), nullable=True)
+    noise_level     = Column(Float, nullable=True)
+    signal_stability= Column(Float, nullable=True)
+    feedback_message= Column(String(255), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationship
     measurement = relationship("Measurement", back_populates="qc_feedback")
 
     def __repr__(self):
-        return f"<QCFeedback(id={self.id}, window={self.window_index}, acceptable={self.is_acceptable})>"
-
-
-class AnalysisResult(Base):
-    """Analysis results (HR, HRV, APG)"""
-
-    __tablename__ = "analysis_results"
-
-    id = Column(Integer, primary_key=True, index=True)
-    measurement_id = Column(Integer, ForeignKey("measurements.id", ondelete="CASCADE"), nullable=False)
-
-    # Heart Rate
-    heart_rate = Column(Float, nullable=True)  # bpm
-
-    # HRV metrics
-    hrv_sdnn = Column(Float, nullable=True)  # ms
-    hrv_rmssd = Column(Float, nullable=True)  # ms
-    hrv_pnn50 = Column(Float, nullable=True)  # percentage
-
-    # APG metrics
-    apg_b_over_a = Column(Float, nullable=True)  # b/a ratio
-    apg_c_over_a = Column(Float, nullable=True)  # c/a ratio
-    apg_d_over_a = Column(Float, nullable=True)  # d/a ratio
-    apg_e_over_a = Column(Float, nullable=True)  # e/a ratio
-
-    # Perfusion Index
-    pi = Column(Float, nullable=True)   # AC/DC × 100 (%)
-    ac = Column(Float, nullable=True)
-    dc = Column(Float, nullable=True)
-
-    # Stress estimation
-    stress_level = Column(Float, nullable=True)  # 0-100
-
-    # Anomaly detection
-    z_score = Column(Float, nullable=True)
-    is_anomaly = Column(Boolean, default=False)
-
-    # Overall status
-    status = Column(String(20), nullable=True)  # 'excellent', 'good', 'normal', 'poor'
-
-    analyzed_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationship
-    measurement = relationship("Measurement", back_populates="analysis_results")
-
-    def __repr__(self):
-        return f"<AnalysisResult(id={self.id}, hr={self.heart_rate}, status='{self.status}')>"
+        return f"<QCFeedback(id={self.id}, window={self.window_index}, ok={self.is_acceptable})>"
 
 
 class UserBaseline(Base):
-    """User baseline statistics for personal comparison"""
+    """
+    Personal baseline — Welford online statistics (mean + M2) for HR and HRV.
+    std = sqrt(M2 / (n-1))  (computed on read, not stored separately)
+    """
 
     __tablename__ = "user_baselines"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
-
-    # Personal averages
-    avg_heart_rate = Column(Float, nullable=True)
-    avg_hrv_sdnn = Column(Float, nullable=True)
-    avg_hrv_rmssd = Column(Float, nullable=True)
-    avg_stress_level = Column(Float, nullable=True)
-
-    # Standard deviations
-    std_heart_rate = Column(Float, nullable=True)
-    std_hrv_sdnn = Column(Float, nullable=True)
-
-    # Sample size
+    id                = Column(Integer, primary_key=True, index=True)
+    user_id           = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    avg_heart_rate    = Column(Float, nullable=True)   # Welford mean
+    m2_heart_rate     = Column(Float, nullable=True)   # Welford M2 → std = sqrt(M2/(n-1))
+    avg_hrv_sdnn      = Column(Float, nullable=True)
+    m2_hrv_sdnn       = Column(Float, nullable=True)
+    avg_hrv_rmssd     = Column(Float, nullable=True)
+    avg_stress_level  = Column(Float, nullable=True)
+    std_heart_rate    = Column(Float, nullable=True)   # kept for legacy reads; updated from M2
+    std_hrv_sdnn      = Column(Float, nullable=True)
     measurement_count = Column(Integer, default=0)
-
-    # Last update
-    last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    last_updated      = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     def __repr__(self):
         return f"<UserBaseline(user_id={self.user_id}, count={self.measurement_count})>"
 
 
 class DemographicBaseline(Base):
-    """Demographic baseline statistics for group comparison"""
+    """
+    Population baseline — seeded from NHANES (independent-sample survey),
+    then updated incrementally via Welford online algorithm as app data accumulates.
+    std = sqrt(M2 / (n-1))
+    """
 
     __tablename__ = "demographic_baselines"
 
-    id = Column(Integer, primary_key=True, index=True)
-    gender = Column(String(10), nullable=False)     # 'male', 'female', 'all'
-    age_group = Column(Integer, nullable=False)     # decade: 20, 30, 40, 50, 60
+    id             = Column(Integer, primary_key=True, index=True)
+    gender         = Column(String(10), nullable=False)   # male / female / all
+    age_group      = Column(Integer, nullable=False)      # decade: 20 30 40 50 60
 
-    # Heart Rate stats (from BUT-PPG ECG-derived HR)
+    # HR stats — Welford state (seeded from NHANES)
     avg_heart_rate = Column(Float, nullable=True)
-    std_heart_rate = Column(Float, nullable=True)
-    sample_count = Column(Integer, default=0)
+    std_heart_rate = Column(Float, nullable=True)   # legacy; derived from M2 when n>1
+    m2_heart_rate  = Column(Float, nullable=True)   # Welford M2
+    sample_count   = Column(Integer, default=0)
 
-    # APG b/a reference values (literature-based, Takazawa 1998 + Bortolotto 2000)
-    b_over_a_ref = Column(Float, nullable=True)
-    b_over_a_std = Column(Float, nullable=True)
+    # APG b/a (Takazawa 1998 — literature, fixed)
+    b_over_a_ref   = Column(Float, nullable=True)
+    b_over_a_std   = Column(Float, nullable=True)
 
-    source = Column(String(200), nullable=True)
+    # HRV SDNN — Welford state (seeded from Task Force 1996)
+    avg_hrv_sdnn   = Column(Float, nullable=True)
+    std_hrv_sdnn   = Column(Float, nullable=True)
+    m2_hrv_sdnn    = Column(Float, nullable=True)
+
+    source     = Column(String(200), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
     def __repr__(self):
-        return f"<DemographicBaseline(gender='{self.gender}', age_group={self.age_group}, n={self.sample_count})>"
+        return f"<DemographicBaseline(gender='{self.gender}', age={self.age_group}, n={self.sample_count})>"
 
 
 class Notification(Base):
@@ -279,14 +141,49 @@ class Notification(Base):
 
     __tablename__ = "notifications"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    type = Column(String(50), nullable=False, default="measurement_complete")
-    title = Column(String(255), nullable=False)
-    message = Column(Text, nullable=True)
+    id        = Column(Integer, primary_key=True, index=True)
+    user_id   = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type      = Column(String(50), nullable=False, default="measurement_complete")
+    title     = Column(String(255), nullable=False)
+    message   = Column(Text, nullable=True)
     data_json = Column(Text, nullable=True)   # JSON string for type-specific payload
-    is_read = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_read   = Column(Boolean, default=False)
+    created_at= Column(DateTime(timezone=True), server_default=func.now())
 
     def __repr__(self):
-        return f"<Notification(id={self.id}, user_id={self.user_id}, type={self.type}, read={self.is_read})>"
+        return f"<Notification(id={self.id}, type={self.type}, read={self.is_read})>"
+
+
+class MockPPGSource(Base):
+    """BUT-PPG dataset recording metadata (dev-only)"""
+
+    __tablename__ = "mock_ppg_sources"
+
+    id        = Column(Integer, primary_key=True, index=True)
+    record_id = Column(String(50), unique=True, nullable=False)
+    hr_ref    = Column(Float, nullable=True)
+    quality   = Column(Integer, default=1)
+    format    = Column(String(1), nullable=True)   # 'A' or 'B'
+    gender    = Column(String(10), nullable=True)
+    age       = Column(Integer, nullable=True)
+    notes     = Column(Text, nullable=True)
+    created_at= Column(DateTime(timezone=True), server_default=func.now())
+
+    packets = relationship("MockPPGPacket", back_populates="source", cascade="all, delete-orphan")
+
+
+class MockPPGPacket(Base):
+    """BLE-packet-shaped PPG data (dev-only, 12 × 10-bit per row)"""
+
+    __tablename__ = "mock_ppg_packets"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    source_id    = Column(Integer, ForeignKey("mock_ppg_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    packet_index = Column(Integer, nullable=False)
+    sync_byte    = Column(Integer, default=0xAA)
+    packet_bytes = Column(LargeBinary(15), nullable=False)
+    battery_level= Column(Integer, default=100)
+    crc          = Column(Integer, nullable=True)
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+
+    source = relationship("MockPPGSource", back_populates="packets")
