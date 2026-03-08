@@ -65,6 +65,13 @@ class AnalysisRequest(BaseModel):
     ppg_data: Optional[List[float]] = Field(None)
     sampling_rate: Optional[int] = Field(200)
 
+class MockRunRequest(BaseModel):
+    """Mock BLE 시뮬레이션 실행 요청"""
+    user_id: int
+    source_id: int
+    is_dev: bool = Field(True, description="True 이면 baseline 업데이트 제외")
+
+
 class SaveMockAnalysisRequest(BaseModel):
     """Accept pre-computed analysis values directly (for mock/dev mode)."""
     heart_rate: int
@@ -103,8 +110,9 @@ class DemographicComparison(BaseModel):
     comparison: str  # 'above_average', 'average', 'below_average'
     apgBOverARef: Optional[float] = None   # Takazawa reference b/a for this age/gender
     apgBOverAStd: Optional[float] = None   # std of reference
-    hrvPercentile: Optional[int] = None    # NEW
-    avgHrvSdnn: Optional[int] = None       # NEW
+    hrvPercentile: Optional[int] = None
+    avgHrvSdnn: Optional[int] = None
+    stdHrvSdnn: Optional[float] = None     # HRV SDNN std for this age group
 
 class AnalysisResponse(BaseModel):
     measurement_id: int

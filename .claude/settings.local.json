@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(pip install:*)",
-      "Bash(python main.py:*)"
+      "Bash(python main.py:*)",
+      "Bash(npm run android)",
+      "Bash(wc -l /Users/yujeongmu/Desktop/ppg-backend/app/**/*.py)",
+      "Bash(python -c \"from app.services.mock_ble_service import simulate_ble_measurement, unpack_packet; print\\(''OK''\\)\")",
+      "Bash(python -c \"from app.api.routes.measurements import router; print\\(''OK''\\)\")",
+      "Bash(python -c \":*)"
     ]
   }
 }

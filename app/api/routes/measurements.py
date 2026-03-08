@@ -25,6 +25,7 @@ from app.db.schemas.measurement import (
     PersonalComparison,
     DemographicComparison,
     SaveMockAnalysisRequest,
+    MockRunRequest,
     BatteryUpdate,
     DiaryUpdateRequest,
     MeasurementHistoryItem,
@@ -269,17 +270,19 @@ async def save_mock_analysis(
     # Build response BEFORE updating baseline — first measurement sees no prior baseline (trend="first")
     response = _build_analysis_response(measurement, db)
 
-    # Update both personal and demographic baselines via Welford
-    from app.db.models.user import User as _User
-    _user = db.query(_User).filter(_User.id == measurement.user_id).first()
-    analysis_service.update_user_baseline(measurement.user_id, request.heart_rate, request.hrv_sdnn, db)
-    analysis_service.update_demographic_baseline(
-        heart_rate=request.heart_rate,
-        hrv_sdnn=request.hrv_sdnn,
-        birth_year=_user.birth_year if _user else None,
-        gender=_user.gender if _user else None,
-        db=db,
-    )
+    # Skip baseline updates for dev/mock measurements (is_dev=True)
+    # Consistent with /analyze and /mock/run endpoints
+    if not measurement.is_dev:
+        from app.db.models.user import User as _User
+        _user = db.query(_User).filter(_User.id == measurement.user_id).first()
+        analysis_service.update_user_baseline(measurement.user_id, request.heart_rate, request.hrv_sdnn, db)
+        analysis_service.update_demographic_baseline(
+            heart_rate=request.heart_rate,
+            hrv_sdnn=request.hrv_sdnn,
+            birth_year=_user.birth_year if _user else None,
+            gender=_user.gender if _user else None,
+            db=db,
+        )
 
     return response
 
@@ -358,6 +361,7 @@ def _build_analysis_response(measurement: Measurement, db: Session) -> AnalysisR
             apgBOverAStd=demo.get("apg_b_over_a_std"),
             hrvPercentile=None,
             avgHrvSdnn=demo.get("avg_hrv_sdnn"),
+            stdHrvSdnn=demo.get("std_hrv_sdnn"),
         ),
         advice=advice,
     )
@@ -496,6 +500,80 @@ async def update_battery(request: BatteryUpdate, db: Session = Depends(get_db)):
     if not measurement:
         raise HTTPException(status_code=404, detail="Measurement not found")
     return {"measurement_id": request.measurement_id, "battery_level": request.battery_level, "status": "updated"}
+
+
+# ── Mock BLE 시뮬레이션 (dev-only) ────────────────────────────────────────────
+
+@router.post("/mock/run", response_model=AnalysisResponse)
+async def run_mock_measurement(
+    request: MockRunRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    MockPPGPacket 데이터를 실제 BLE 통신처럼 처리하여 완전한 분석 결과를 반환한다.
+
+    1. 패킷 언패킹 (15B → 12 × 10-bit float)
+    2. QC 윈도우 처리 (400 샘플 단위) — QCFeedback DB 저장
+    3. 전체 신호 분석 (HR, HRV, APG, 스트레스)
+    4. AnalysisResponse 반환 (실제 /analyze 엔드포인트와 동일)
+    """
+    from app.services.mock_ble_service import simulate_ble_measurement
+
+    try:
+        sim = simulate_ble_measurement(
+            source_id=request.source_id,
+            user_id=request.user_id,
+            db=db,
+            is_dev=request.is_dev,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    measurement = sim["measurement"]
+    all_ppg     = sim["all_ppg_data"]
+    sampling_rate = sim["sampling_rate"]
+
+    # 분석
+    hr_hrv     = analysis_service.compute_hr_hrv(all_ppg, sampling_rate)
+    heart_rate = hr_hrv["heart_rate"] or 72
+    hrv_sdnn   = hr_hrv["hrv_sdnn"] or 40
+    hrv_rmssd  = hr_hrv["hrv_rmssd"]
+
+    pi_val = analysis_service.compute_perfusion_index(all_ppg)
+    ac_val = float(max(all_ppg) - min(all_ppg)) if len(all_ppg) >= 2 else 0.0
+    dc_val = float(sum(all_ppg) / len(all_ppg)) if all_ppg else 0.0
+
+    apg    = analysis_service.compute_apg_indices(all_ppg, sampling_rate)
+    stress = analysis_service.compute_stress(hrv_sdnn)
+    status = analysis_service.determine_status(heart_rate, hrv_sdnn)
+
+    measurement.heart_rate    = float(heart_rate)
+    measurement.hrv_sdnn      = float(hrv_sdnn)
+    measurement.hrv_rmssd     = float(hrv_rmssd) if hrv_rmssd else None
+    measurement.pi            = float(pi_val) if pi_val is not None else None
+    measurement.ac            = round(ac_val, 2)
+    measurement.dc            = round(dc_val, 2)
+    measurement.apg_b_over_a  = apg["b_over_a"] if apg else None
+    measurement.apg_c_over_a  = apg["c_over_a"] if apg else None
+    measurement.apg_d_over_a  = apg["d_over_a"] if apg else None
+    measurement.stress_level  = float(stress)
+    measurement.result_status = status
+    db.commit()
+
+    # is_dev=False 일 때만 baseline 업데이트
+    if not measurement.is_dev:
+        from app.db.models.user import User as _User
+        _user = db.query(_User).filter(_User.id == measurement.user_id).first()
+        analysis_service.update_user_baseline(measurement.user_id, heart_rate, hrv_sdnn, db)
+        analysis_service.update_demographic_baseline(
+            heart_rate=heart_rate,
+            hrv_sdnn=hrv_sdnn,
+            birth_year=_user.birth_year if _user else None,
+            gender=_user.gender if _user else None,
+            db=db,
+        )
+
+    return _build_analysis_response(measurement, db)
 
 
 # ── Mock PPG packets (dev-only) ───────────────────────────────────────────────
