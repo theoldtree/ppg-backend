@@ -284,6 +284,21 @@ async def save_mock_analysis(
             db=db,
         )
 
+    # Always create measurement_complete notification (including dev/mock mode)
+    try:
+        create_measurement_complete_notification(
+            db=db,
+            user_id=measurement.user_id,
+            heart_rate=int(measurement.heart_rate),
+            hrv=int(measurement.hrv_sdnn),
+            status=measurement.result_status,
+            percentile=response.demographic.percentile,
+            measurement_id=measurement_id,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to create measurement_complete notification: %s", e)
+
     return response
 
 

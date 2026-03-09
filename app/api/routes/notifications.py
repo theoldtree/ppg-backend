@@ -104,3 +104,61 @@ async def get_unread_count(
         Notification.is_read == False,  # noqa: E712
     ).count()
     return {"count": count}
+
+
+# ── DEV-ONLY: manual scheduler trigger ───────────────────────────────────────
+
+@router.post("/dev/trigger")
+async def dev_trigger_notification(
+    job: str,
+    user_id: int = Depends(_get_user_id),
+    db: Session = Depends(get_db),
+):
+    """DEV ONLY — manually fire a scheduler job for testing.
+    job: 'morning' | 'afternoon' | 'weekly'
+    """
+    import os
+    if os.getenv("APP_ENV", "development") == "production":
+        raise HTTPException(status_code=403, detail="Not available in production")
+
+    from app.services import notification_service as ns
+    from datetime import datetime, timezone
+
+    if job == "morning":
+        ns.create_reminder_notification(db=db, user_id=user_id, slot="morning")
+    elif job == "afternoon":
+        ns.create_reminder_notification(db=db, user_id=user_id, slot="afternoon")
+    elif job == "weekly":
+        # Minimal inline weekly report for single user
+        from app.db.models import Measurement
+        from datetime import timedelta
+        KST_OFFSET = timedelta(hours=9)
+        now_kst = datetime.now(timezone.utc) + KST_OFFSET
+        week_ago = (now_kst - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        two_weeks_ago = (now_kst - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
+        this_week = db.query(Measurement).filter(
+            Measurement.user_id == user_id,
+            Measurement.status == "completed",
+            Measurement.heart_rate.isnot(None),
+            Measurement.completed_at >= week_ago,
+        ).all()
+        if not this_week:
+            return {"status": "skipped", "reason": "no measurements this week"}
+        avg_hr = sum(m.heart_rate for m in this_week) / len(this_week)
+        prev_week = db.query(Measurement).filter(
+            Measurement.user_id == user_id,
+            Measurement.status == "completed",
+            Measurement.heart_rate.isnot(None),
+            Measurement.completed_at >= two_weeks_ago,
+            Measurement.completed_at < week_ago,
+        ).all()
+        prev_avg_hr = sum(m.heart_rate for m in prev_week) / len(prev_week) if prev_week else None
+        ns.create_weekly_report_notification(
+            db=db, user_id=user_id,
+            avg_hr=avg_hr, prev_avg_hr=prev_avg_hr,
+            measurement_count=len(this_week),
+        )
+    else:
+        raise HTTPException(status_code=400, detail="job must be 'morning', 'afternoon', or 'weekly'")
+
+    return {"status": "ok", "job": job}

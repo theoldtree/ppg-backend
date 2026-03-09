@@ -36,14 +36,18 @@ def _check_reminders(slot: str) -> None:
     db = _get_db_session()
     try:
         today_kst = datetime.now(KST).date()
-        # Users who have NOT completed a measurement today
+        # Midnight KST as UTC string — SQLite stores datetimes as naive UTC strings.
+        # Subtract 9h to convert KST midnight → UTC, then compare as string prefix.
+        midnight_kst_utc = datetime(today_kst.year, today_kst.month, today_kst.day,
+                                    tzinfo=KST).astimezone(timezone.utc)
+        midnight_utc_str = midnight_kst_utc.strftime("%Y-%m-%d %H:%M:%S")
+        # Users who have NOT completed a measurement today (KST)
         measured_today_ids = {
             row[0] for row in
             db.query(Measurement.user_id)
             .filter(
                 Measurement.status == "completed",
-                # SQLite stores naive UTC datetimes; compare as strings for safety
-                Measurement.completed_at >= today_kst.strftime("%Y-%m-%d"),
+                Measurement.completed_at >= midnight_utc_str,
             )
             .all()
         }
@@ -78,8 +82,17 @@ def weekly_report() -> None:
     db = _get_db_session()
     try:
         now_kst = datetime.now(KST)
-        this_week_start = (now_kst - timedelta(days=7)).strftime("%Y-%m-%d")
-        prev_week_start = (now_kst - timedelta(days=14)).strftime("%Y-%m-%d")
+        # Convert KST date boundaries to UTC strings for SQLite comparison
+        this_week_kst = datetime((now_kst - timedelta(days=7)).year,
+                                 (now_kst - timedelta(days=7)).month,
+                                 (now_kst - timedelta(days=7)).day,
+                                 tzinfo=KST).astimezone(timezone.utc)
+        prev_week_kst = datetime((now_kst - timedelta(days=14)).year,
+                                 (now_kst - timedelta(days=14)).month,
+                                 (now_kst - timedelta(days=14)).day,
+                                 tzinfo=KST).astimezone(timezone.utc)
+        this_week_start = this_week_kst.strftime("%Y-%m-%d %H:%M:%S")
+        prev_week_start = prev_week_kst.strftime("%Y-%m-%d %H:%M:%S")
 
         all_users = db.query(User).all()
         for user in all_users:
